@@ -1,25 +1,14 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { Circle, MessageSquare, ClipboardCheck, Save } from "lucide-react"
+import { MessageSquare, ClipboardCheck } from "lucide-react"
 
-export function TopBar() {
-  const handleRecordSession = () => {
-    console.log("Record session clicked")
-  }
+interface TopBarProps {
+  onExplain?: () => void
+  onReview?: () => void
+}
 
-  const handleExplain = () => {
-    console.log("Explain clicked")
-  }
-
-  const handleReview = () => {
-    console.log("Review clicked")
-  }
-
-  const handleSave = () => {
-    console.log("Save clicked")
-  }
-
+export function TopBar({ onExplain, onReview }: TopBarProps) {
   return (
     <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4">
       <div className="flex items-center gap-2">
@@ -30,21 +19,13 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={handleRecordSession} className="bg-red-600 text-white hover:bg-red-700">
-          <Circle className="h-4 w-4 fill-current" />
-          Record Session
-        </Button>
-        <Button variant="ghost" size="sm" onClick={handleExplain} className="text-foreground hover:bg-muted">
+        <Button variant="ghost" size="sm" onClick={onExplain} className="text-foreground hover:bg-muted">
           <MessageSquare className="h-4 w-4" />
-          Explain
+          Open AI Assistant
         </Button>
-        <Button variant="ghost" size="sm" onClick={handleReview} className="text-foreground hover:bg-muted">
+        <Button variant="ghost" size="sm" onClick={onReview} className="text-foreground hover:bg-muted">
           <ClipboardCheck className="h-4 w-4" />
-          Review
-        </Button>
-        <Button variant="default" size="sm" onClick={handleSave}>
-          <Save className="h-4 w-4" />
-          Save
+          Go to Upload
         </Button>
       </div>
     </header>
