@@ -4,16 +4,18 @@ import type React from "react"
 
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle } from "@/components/ui/card"
-import { Square, Link2, StickyNote, GripVertical, Globe, Shield, Database } from "lucide-react"
+import { Card } from "@/components/ui/card"
+import { Link2, StickyNote, GripVertical } from "lucide-react"
 import { supabase } from "@/lib/supabase"
+
+const BOX_WIDTH = 180
+const BOX_HEIGHT = 120
 
 interface Box {
   id: string
-  title: string
-  type: "gateway" | "service" | "database"
   x: number
   y: number
+  text: string
 }
 
 interface Connection {
@@ -39,34 +41,17 @@ interface WhiteboardProps {
   onBoardChange?: (board: BoardSnapshot) => void
 }
 
-const getNodeIcon = (type: Box["type"]) => {
-  switch (type) {
-    case "gateway":
-      return <Globe className="h-4 w-4 text-blue-400" />
-    case "service":
-      return <Shield className="h-4 w-4 text-green-400" />
-    case "database":
-      return <Database className="h-4 w-4 text-amber-400" />
-  }
-}
-
-const getNodeLabel = (type: Box["type"]) => {
-  switch (type) {
-    case "gateway":
-      return "Gateway"
-    case "service":
-      return "Service"
-    case "database":
-      return "Storage"
-  }
-}
-
 export function Whiteboard({ onBoardChange }: WhiteboardProps) {
+  const toNumber = (value: unknown, fallback: number) => {
+    const num = typeof value === "number" ? value : Number.parseFloat(String(value))
+    return Number.isFinite(num) ? num : fallback
+  }
+
   // Core board state (nodes, edges, notes)
   const [boxes, setBoxes] = useState<Box[]>([
-    { id: "1", title: "API Gateway", type: "gateway", x: 100, y: 100 },
-    { id: "2", title: "Auth Service", type: "service", x: 350, y: 100 },
-    { id: "3", title: "Database", type: "database", x: 225, y: 280 },
+    { id: "1", text: "API Gateway", x: 100, y: 100 },
+    { id: "2", text: "Auth Service", x: 350, y: 100 },
+    { id: "3", text: "Database", x: 225, y: 280 },
   ])
   const [connections, setConnections] = useState<Connection[]>([
     { id: "c1", from: "1", to: "2" },
@@ -76,16 +61,22 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
   const [notes, setNotes] = useState<Note[]>([])
   // Interaction state for dragging and connecting
   const [dragging, setDragging] = useState<string | null>(null)
+  const dragOffsetRef = useRef<{ x: number; y: number } | null>(null)
   const [connectMode, setConnectMode] = useState(false)
   const [connectFrom, setConnectFrom] = useState<string | null>(null)
   const whiteboardRef = useRef<HTMLDivElement>(null)
   const [boardId, setBoardId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [editingBoxId, setEditingBoxId] = useState<string | null>(null)
-  const [editingBoxValue, setEditingBoxValue] = useState("")
-  const editingInputRef = useRef<HTMLInputElement>(null)
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null)
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null)
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
+  const [editingBoxId, setEditingBoxId] = useState<string | null>(null)
+  const [editingBoxValue, setEditingBoxValue] = useState("")
+  const editingInputRef = useRef<HTMLTextAreaElement>(null)
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
+  const [editingNoteValue, setEditingNoteValue] = useState("")
+  const editingNoteRef = useRef<HTMLTextAreaElement>(null)
+  const [showClearDialog, setShowClearDialog] = useState(false)
 
   useEffect(() => {
     let isMounted = true
@@ -108,7 +99,15 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
           connections?: Connection[]
           notes?: Note[]
         }
-        if (boardData.boxes) setBoxes(boardData.boxes)
+        if (boardData.boxes) {
+          const normalized = boardData.boxes.map((box) => ({
+            id: box.id,
+            x: toNumber(box.x, 0),
+            y: toNumber(box.y, 0),
+            text: typeof (box as Box).text === "string" ? (box as Box).text : (box as { title?: string }).title ?? "",
+          }))
+          setBoxes(normalized)
+        }
         if (boardData.connections) setConnections(boardData.connections)
         if (boardData.notes) setNotes(boardData.notes)
       } else if (error) {
@@ -148,29 +147,15 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
     return () => window.clearTimeout(timeoutId)
   }, [boardId, boxes, connections, notes, isLoading])
 
-  const getDefaultTitle = (type: Box["type"]) => {
-    switch (type) {
-      case "gateway":
-        return "New Gateway"
-      case "service":
-        return "New Service"
-      case "database":
-        return "New Storage"
-    }
-  }
-
-  // Add a new box of the selected type at a random-ish position
-  const handleAddBox = (type: Box["type"]) => {
+  // Add a new box at a random-ish position
+  const handleAddBox = () => {
     const newBox: Box = {
       id: `box-${Date.now()}`,
-      title: getDefaultTitle(type),
-      type,
+      text: "New box",
       x: 150 + Math.random() * 100,
       y: 150 + Math.random() * 100,
     }
     setBoxes([...boxes, newBox])
-    setEditingBoxId(newBox.id)
-    setEditingBoxValue(newBox.title)
   }
 
   // Toggle connect mode (click two boxes to create a line)
@@ -188,6 +173,17 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
       y: 50 + Math.random() * 100,
     }
     setNotes([...notes, newNote])
+  }
+
+  const handleClearCanvas = () => {
+    setBoxes([])
+    setConnections([])
+    setNotes([])
+    setSelectedBoxId(null)
+    setSelectedConnectionId(null)
+    setConnectFrom(null)
+    setConnectMode(false)
+    setShowClearDialog(false)
   }
 
   // Handle box click when in connect mode
@@ -215,25 +211,44 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
     if (connectMode) return
     setSelectedConnectionId(connId)
     setSelectedBoxId(null)
+    setSelectedNoteId(null)
   }
 
   const startEditingBox = (box: Box) => {
     setEditingBoxId(box.id)
-    setEditingBoxValue(box.title)
+    setEditingBoxValue(box.text)
   }
 
-  const commitBoxTitle = () => {
+  const commitBoxText = () => {
     if (!editingBoxId) return
-    const nextTitle = editingBoxValue.trim() || "Untitled Service"
-    setBoxes(boxes.map((b) => (b.id === editingBoxId ? { ...b, title: nextTitle } : b)))
+    const nextText = editingBoxValue.trim()
+    setBoxes((prev) => prev.map((b) => (b.id === editingBoxId ? { ...b, text: nextText } : b)))
     setEditingBoxId(null)
   }
 
+  const startEditingNote = (note: Note) => {
+    setEditingNoteId(note.id)
+    setEditingNoteValue(note.content)
+  }
+
+  const commitNoteText = () => {
+    if (!editingNoteId) return
+    const nextText = editingNoteValue.trim()
+    setNotes((prev) => prev.map((n) => (n.id === editingNoteId ? { ...n, content: nextText } : n)))
+    setEditingNoteId(null)
+  }
+
   // Start dragging a box or note
-  const handleMouseDown = (id: string, e: React.MouseEvent) => {
+  const handleMouseDown = (id: string, x: number, y: number, e: React.MouseEvent) => {
     if (connectMode) return
     e.preventDefault()
     setDragging(id)
+    if (!whiteboardRef.current) return
+    const rect = whiteboardRef.current.getBoundingClientRect()
+    dragOffsetRef.current = {
+      x: e.clientX - rect.left - x,
+      y: e.clientY - rect.top - y,
+    }
   }
 
   // Update position while dragging
@@ -241,25 +256,27 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
     if (!dragging || !whiteboardRef.current) return
 
     const rect = whiteboardRef.current.getBoundingClientRect()
-    const x = e.clientX - rect.left - 75
-    const y = e.clientY - rect.top - 25
+    const offset = dragOffsetRef.current ?? { x: 0, y: 0 }
+    const x = e.clientX - rect.left - offset.x
+    const y = e.clientY - rect.top - offset.y
 
     if (dragging.startsWith("note-")) {
-      setNotes(notes.map((n) => (n.id === dragging ? { ...n, x, y } : n)))
+      setNotes((prev) => prev.map((n) => (n.id === dragging ? { ...n, x, y } : n)))
     } else {
-      setBoxes(boxes.map((b) => (b.id === dragging ? { ...b, x, y } : b)))
+      setBoxes((prev) => prev.map((b) => (b.id === dragging ? { ...b, x, y } : b)))
     }
   }
 
   // Stop dragging
   const handleMouseUp = () => {
     setDragging(null)
+    dragOffsetRef.current = null
   }
 
   // Used to draw lines from the visual center of each box
   const getBoxCenter = (box: Box) => ({
-    x: box.x + 75,
-    y: box.y + 30,
+    x: box.x + BOX_WIDTH / 2,
+    y: box.y + BOX_HEIGHT / 2,
   })
 
   useEffect(() => {
@@ -268,6 +285,13 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
       editingInputRef.current.select()
     }
   }, [editingBoxId])
+
+  useEffect(() => {
+    if (editingNoteId && editingNoteRef.current) {
+      editingNoteRef.current.focus()
+      editingNoteRef.current.select()
+    }
+  }, [editingNoteId])
 
   useEffect(() => {
     if (!onBoardChange) return
@@ -285,7 +309,6 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
       }
       if (e.key !== "Delete" && e.key !== "Backspace") return
       if (selectedBoxId) {
-        if (editingBoxId === selectedBoxId) return
         setBoxes((prev) => prev.filter((b) => b.id !== selectedBoxId))
         setConnections((prev) => prev.filter((c) => c.from !== selectedBoxId && c.to !== selectedBoxId))
         setSelectedBoxId(null)
@@ -295,11 +318,16 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
         setConnections((prev) => prev.filter((c) => c.id !== selectedConnectionId))
         setSelectedConnectionId(null)
       }
+      if (selectedNoteId) {
+        if (editingNoteId === selectedNoteId) return
+        setNotes((prev) => prev.filter((n) => n.id !== selectedNoteId))
+        setSelectedNoteId(null)
+      }
     }
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [selectedBoxId, editingBoxId])
+  }, [selectedBoxId, selectedNoteId, editingNoteId])
 
   useEffect(() => {
     const handleDocumentMouseDown = (e: MouseEvent) => {
@@ -321,29 +349,11 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => handleAddBox("gateway")}
+          onClick={handleAddBox}
           className="border-zinc-700 text-zinc-100 hover:bg-zinc-800 hover:text-white bg-transparent"
         >
-          <Globe className="h-4 w-4" />
-          Add Gateway
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => handleAddBox("service")}
-          className="border-zinc-700 text-zinc-100 hover:bg-zinc-800 hover:text-white bg-transparent"
-        >
-          <Shield className="h-4 w-4" />
-          Add Service
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => handleAddBox("database")}
-          className="border-zinc-700 text-zinc-100 hover:bg-zinc-800 hover:text-white bg-transparent"
-        >
-          <Database className="h-4 w-4" />
-          Add Storage
+          <GripVertical className="h-4 w-4" />
+          Add Box
         </Button>
         <Button
           variant={connectMode ? "default" : "outline"}
@@ -362,6 +372,14 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
         >
           <StickyNote className="h-4 w-4" />
           Add Note
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowClearDialog(true)}
+          className="border-zinc-700 text-zinc-100 hover:bg-zinc-800 hover:text-white bg-transparent"
+        >
+          Clear Canvas
         </Button>
         {connectMode && (
           <span className="ml-2 text-sm text-zinc-300">
@@ -382,6 +400,7 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
           if (target.closest("[data-whiteboard-item='true']")) return
           setSelectedBoxId(null)
           setSelectedConnectionId(null)
+          setSelectedNoteId(null)
         }}
       >
         {/* Grid pattern */}
@@ -452,45 +471,38 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
         {boxes.map((box) => (
           <Card
             key={box.id}
-            className={`absolute w-[150px] cursor-move select-none border-zinc-700 bg-zinc-900 transition-shadow ${
+            className={`absolute cursor-move select-none border-zinc-700 bg-zinc-900 transition-shadow ${
               connectMode ? "cursor-pointer hover:ring-2 hover:ring-primary" : ""
             } ${connectFrom === box.id ? "ring-2 ring-primary" : ""} ${
               selectedBoxId === box.id ? "ring-2 ring-blue-500" : ""
             }`}
-            style={{ left: box.x, top: box.y }}
-            onMouseDown={(e) => handleMouseDown(box.id, e)}
+            style={{ left: box.x, top: box.y, width: BOX_WIDTH, height: BOX_HEIGHT }}
+            onMouseDown={(e) => handleMouseDown(box.id, box.x, box.y, e)}
             onClick={() => handleBoxClick(box.id)}
             data-whiteboard-item="true"
           >
-            <CardHeader className="p-3">
-              <div className="mb-1 flex items-center gap-1">
-                {getNodeIcon(box.type)}
-                <span className="text-[10px] uppercase tracking-wide text-zinc-500">{getNodeLabel(box.type)}</span>
+            {editingBoxId === box.id ? (
+              <textarea
+                ref={editingInputRef}
+                value={editingBoxValue}
+                onChange={(e) => setEditingBoxValue(e.target.value)}
+                onBlur={commitBoxText}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitBoxText()
+                  if (e.key === "Escape") setEditingBoxId(null)
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="h-full w-full resize-none bg-transparent p-2 text-center text-sm text-zinc-100 outline-none"
+                placeholder="Type here..."
+              />
+            ) : (
+              <div
+                className="flex h-full w-full items-center justify-center p-2 text-center text-sm text-zinc-100"
+                onDoubleClick={() => startEditingBox(box)}
+              >
+                {box.text || <span className="text-zinc-500">Double-click to edit</span>}
               </div>
-              <div className="flex items-center gap-2">
-                <GripVertical className="h-4 w-4 text-zinc-500" />
-                {editingBoxId === box.id ? (
-                  <input
-                    ref={editingInputRef}
-                    value={editingBoxValue}
-                    onChange={(e) => setEditingBoxValue(e.target.value)}
-                    onBlur={commitBoxTitle}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitBoxTitle()
-                      if (e.key === "Escape") setEditingBoxId(null)
-                    }}
-                    className="w-full bg-transparent text-sm text-zinc-100 outline-none"
-                  />
-                ) : (
-                  <CardTitle
-                    className="text-sm text-zinc-100"
-                    onDoubleClick={() => startEditingBox(box)}
-                  >
-                    {box.title}
-                  </CardTitle>
-                )}
-              </div>
-            </CardHeader>
+            )}
           </Card>
         ))}
 
@@ -498,15 +510,58 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
         {notes.map((note) => (
           <div
             key={note.id}
-            className="absolute w-[120px] cursor-move select-none rounded-md bg-yellow-500/90 p-2 text-xs text-yellow-950 shadow-md"
+            className={`absolute w-[120px] cursor-move select-none rounded-md bg-yellow-500/90 p-2 text-xs text-yellow-950 shadow-md ${
+              selectedNoteId === note.id ? "ring-2 ring-blue-500" : ""
+            }`}
             style={{ left: note.x, top: note.y }}
-            onMouseDown={(e) => handleMouseDown(note.id, e)}
+            onMouseDown={(e) => handleMouseDown(note.id, note.x, note.y, e)}
+            onClick={() => {
+              setSelectedNoteId(note.id)
+              setSelectedBoxId(null)
+              setSelectedConnectionId(null)
+            }}
             data-whiteboard-item="true"
           >
-            {note.content}
+            {editingNoteId === note.id ? (
+              <textarea
+                ref={editingNoteRef}
+                value={editingNoteValue}
+                onChange={(e) => setEditingNoteValue(e.target.value)}
+                onBlur={commitNoteText}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitNoteText()
+                  if (e.key === "Escape") setEditingNoteId(null)
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="h-full w-full resize-none bg-transparent text-xs text-yellow-950 outline-none"
+              />
+            ) : (
+              <div onDoubleClick={() => startEditingNote(note)}>
+                {note.content || <span className="text-yellow-900/70">Double-click to edit</span>}
+              </div>
+            )}
           </div>
         ))}
       </div>
+
+      {showClearDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-lg">
+            <h3 className="text-base font-semibold text-foreground">Clear canvas?</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              This will remove all boxes, connections, and notes. This action can’t be undone.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setShowClearDialog(false)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" onClick={handleClearCanvas}>
+                Clear
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
