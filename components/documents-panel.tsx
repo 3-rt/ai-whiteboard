@@ -6,9 +6,9 @@ import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { uploadDocument } from "@/lib/documents"
+import { deleteDocument, uploadDocument } from "@/lib/documents"
 import { supabase } from "@/lib/supabase"
-import { FileText } from "lucide-react"
+import { FileText, MessageSquare, ClipboardCheck, X } from "lucide-react"
 
 interface DocumentMeta {
   id: string
@@ -16,11 +16,17 @@ interface DocumentMeta {
   storage_path: string
 }
 
-export function DocumentsPanel() {
+interface DocumentsPanelProps {
+  onOpenAssistant: () => void
+  onOpenUpload: () => void
+}
+
+export function DocumentsPanel({ onOpenAssistant, onOpenUpload }: DocumentsPanelProps) {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null)
   const [documents, setDocuments] = useState<DocumentMeta[]>([])
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const loadDocuments = async () => {
     const boardId = localStorage.getItem("whiteboard-id")
@@ -74,16 +80,51 @@ export function DocumentsPanel() {
     }
   }
 
+  const handleDelete = async (doc: DocumentMeta) => {
+    setDeletingId(doc.id)
+    setUploadError(null)
+    try {
+      await deleteDocument({ id: doc.id, storage_path: doc.storage_path })
+      await loadDocuments()
+    } catch (error) {
+      console.error("Delete failed", error)
+      setUploadError("Delete failed. Please try again.")
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <div className="flex w-[400px] flex-col bg-card">
       <div className="border-b border-border p-4">
-        <div className="flex items-center gap-2">
-          <FileText className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-semibold text-foreground">Documents</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold text-foreground">Documents</h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Upload supporting files so the assistant can reference them later.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="button" size="sm" variant="ghost" onClick={onOpenAssistant} className="text-foreground hover:bg-muted">
+              <MessageSquare className="h-4 w-4" />
+              Open AI Assistant
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={onOpenUpload}
+              disabled
+              className="text-foreground hover:bg-muted"
+            >
+              <ClipboardCheck className="h-4 w-4" />
+              Go to Upload
+            </Button>
+          </div>
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Upload supporting files so the assistant can reference them later.
-        </p>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
@@ -116,6 +157,17 @@ export function DocumentsPanel() {
                 {documents.map((doc) => (
                   <li key={doc.id} className="flex items-center justify-between gap-2">
                     <span className="truncate">{doc.filename}</span>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => handleDelete(doc)}
+                      disabled={deletingId === doc.id}
+                      className="h-5 w-5 text-muted-foreground hover:text-foreground"
+                      aria-label={`Remove ${doc.filename}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
                   </li>
                 ))}
               </ul>

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { supabase } from "@/lib/supabase"
 import type { BoardSnapshot } from "@/components/whiteboard"
-import { Send, Lightbulb, AlertTriangle, GitBranch, HelpCircle, Sparkles } from "lucide-react"
+import { Send, Lightbulb, AlertTriangle, GitBranch, HelpCircle, Sparkles, MessageSquare, ClipboardCheck } from "lucide-react"
 import { Input } from "@/components/ui/input"
 
 interface DocumentMeta {
@@ -21,6 +21,8 @@ interface AIPanelProps {
   board: BoardSnapshot | null
   activeTab: "ask" | "summary" | "risks" | "decisions"
   onTabChange: (tab: "ask" | "summary" | "risks" | "decisions") => void
+  onOpenAssistant: () => void
+  onOpenUpload: () => void
 }
 
 const renderInline = (text: string) => {
@@ -121,7 +123,7 @@ const renderMarkdown = (text: string) => {
   return <div className="space-y-3">{nodes}</div>
 }
 
-export function AIPanel({ board, activeTab, onTabChange }: AIPanelProps) {
+export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpenUpload }: AIPanelProps) {
   const [query, setQuery] = useState("")
   const [documents, setDocuments] = useState<DocumentMeta[]>([])
   const [askResponse, setAskResponse] = useState<string | null>(null)
@@ -273,14 +275,35 @@ export function AIPanel({ board, activeTab, onTabChange }: AIPanelProps) {
   return (
     <div className="flex w-[400px] min-h-0 flex-col bg-card">
       <div className="border-b border-border p-4">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-semibold text-foreground">AI Assistant</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <h2 className="text-lg font-semibold text-foreground">AI Assistant</h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Analyze your architecture, identify risks, and explore what-if scenarios. Select a tab or ask a question
+              below.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={onOpenAssistant}
+              disabled
+              className="text-foreground hover:bg-muted"
+            >
+              <MessageSquare className="h-4 w-4" />
+              Open AI Assistant
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={onOpenUpload} className="text-foreground hover:bg-muted">
+              <ClipboardCheck className="h-4 w-4" />
+              Go to Upload
+            </Button>
+          </div>
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Analyze your architecture, identify risks, and explore what-if scenarios. Select a tab or ask a question
-          below.
-        </p>
       </div>
 
       <Tabs

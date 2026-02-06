@@ -27,3 +27,15 @@ export async function uploadDocument(boardId: string, file: File) {
 
   return { id: docId, url: urlData.publicUrl }
 }
+
+export async function deleteDocument(doc: { id: string; storage_path: string }) {
+  const { error: storageError } = await supabase.storage.from("documents").remove([doc.storage_path])
+  if (storageError) {
+    throw storageError
+  }
+
+  const { error: deleteError } = await supabase.from("documents").delete().eq("id", doc.id)
+  if (deleteError) {
+    throw deleteError
+  }
+}
