@@ -10,7 +10,6 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "System Designer - Collaborative Whiteboard",
   description: "AI-powered collaborative system design whiteboard",
-  generator: "v0.app",
   icons: {
     icon: "/favicon.svg",
   },

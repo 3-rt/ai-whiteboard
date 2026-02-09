@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Link2, StickyNote, GripVertical } from "lucide-react"
@@ -10,6 +10,7 @@ import { supabase } from "@/lib/supabase"
 
 const BOX_WIDTH = 180
 const BOX_HEIGHT = 120
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
 interface Box {
   id: string
@@ -77,6 +78,9 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
   const [editingNoteValue, setEditingNoteValue] = useState("")
   const editingNoteRef = useRef<HTMLTextAreaElement>(null)
   const [showClearDialog, setShowClearDialog] = useState(false)
+  const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
+  const panStartRef = useRef<{ x: number; y: number; viewX: number; viewY: number } | null>(null)
+  const spacePressedRef = useRef(false)
 
   useEffect(() => {
     let isMounted = true
@@ -238,27 +242,42 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
     setEditingNoteId(null)
   }
 
+  const getWorldPoint = (e: { clientX: number; clientY: number }) => {
+    if (!whiteboardRef.current) return { x: 0, y: 0 }
+    const rect = whiteboardRef.current.getBoundingClientRect()
+    return {
+      x: (e.clientX - rect.left - view.x) / view.scale,
+      y: (e.clientY - rect.top - view.y) / view.scale,
+    }
+  }
+
   // Start dragging a box or note
   const handleMouseDown = (id: string, x: number, y: number, e: React.MouseEvent) => {
     if (connectMode) return
     e.preventDefault()
     setDragging(id)
-    if (!whiteboardRef.current) return
-    const rect = whiteboardRef.current.getBoundingClientRect()
-    dragOffsetRef.current = {
-      x: e.clientX - rect.left - x,
-      y: e.clientY - rect.top - y,
-    }
+    const world = getWorldPoint(e)
+    dragOffsetRef.current = { x: world.x - x, y: world.y - y }
   }
 
   // Update position while dragging
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (panStartRef.current) {
+      const deltaX = e.clientX - panStartRef.current.x
+      const deltaY = e.clientY - panStartRef.current.y
+      setView({
+        x: panStartRef.current.viewX + deltaX,
+        y: panStartRef.current.viewY + deltaY,
+        scale: view.scale,
+      })
+      return
+    }
     if (!dragging || !whiteboardRef.current) return
 
-    const rect = whiteboardRef.current.getBoundingClientRect()
     const offset = dragOffsetRef.current ?? { x: 0, y: 0 }
-    const x = e.clientX - rect.left - offset.x
-    const y = e.clientY - rect.top - offset.y
+    const world = getWorldPoint(e)
+    const x = world.x - offset.x
+    const y = world.y - offset.y
 
     if (dragging.startsWith("note-")) {
       setNotes((prev) => prev.map((n) => (n.id === dragging ? { ...n, x, y } : n)))
@@ -269,6 +288,7 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
 
   // Stop dragging
   const handleMouseUp = () => {
+    panStartRef.current = null
     setDragging(null)
     dragOffsetRef.current = null
   }
@@ -300,6 +320,9 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === " ") {
+        spacePressedRef.current = true
+      }
       if (e.key === "Escape") {
         setSelectedBoxId(null)
         setSelectedConnectionId(null)
@@ -326,7 +349,16 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
     }
 
     window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " ") {
+        spacePressedRef.current = false
+      }
+    }
+    window.addEventListener("keyup", handleKeyUp)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+      window.removeEventListener("keyup", handleKeyUp)
+    }
   }, [selectedBoxId, selectedNoteId, editingNoteId])
 
   useEffect(() => {
@@ -340,6 +372,40 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
     document.addEventListener("mousedown", handleDocumentMouseDown)
     return () => document.removeEventListener("mousedown", handleDocumentMouseDown)
   }, [])
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    if (!whiteboardRef.current) return
+    e.preventDefault()
+    const rect = whiteboardRef.current.getBoundingClientRect()
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+
+    if (e.ctrlKey) {
+      const zoomFactor = 1 - e.deltaY * 0.005
+      setView((prev) => {
+        const nextScale = clamp(prev.scale * zoomFactor, 0.25, 3)
+        const wx = (cx - prev.x) / prev.scale
+        const wy = (cy - prev.y) / prev.scale
+        const nextX = cx - wx * nextScale
+        const nextY = cy - wy * nextScale
+        return { x: nextX, y: nextY, scale: nextScale }
+      })
+      return
+    }
+
+    setView((prev) => ({
+      x: prev.x - e.deltaX,
+      y: prev.y - e.deltaY,
+      scale: prev.scale,
+    }))
+  }, [])
+
+  useEffect(() => {
+    const node = whiteboardRef.current
+    if (!node) return
+    node.addEventListener("wheel", handleWheel, { passive: false })
+    return () => node.removeEventListener("wheel", handleWheel)
+  }, [handleWheel])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col border-r border-border">
@@ -398,6 +464,11 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
         onMouseDown={(e) => {
           const target = e.target as HTMLElement
           if (target.closest("[data-whiteboard-item='true']")) return
+          if (e.button === 1 || spacePressedRef.current) {
+            e.preventDefault()
+            panStartRef.current = { x: e.clientX, y: e.clientY, viewX: view.x, viewY: view.y }
+            return
+          }
           setSelectedBoxId(null)
           setSelectedConnectionId(null)
           setSelectedNoteId(null)
@@ -406,7 +477,13 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
         {/* Grid pattern */}
         <svg className="absolute inset-0 h-full w-full" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <pattern
+              id="grid"
+              width="40"
+              height="40"
+              patternUnits="userSpaceOnUse"
+              patternTransform={`translate(${view.x} ${view.y}) scale(${view.scale})`}
+            >
               <path
                 d="M 40 0 L 0 0 0 40"
                 fill="none"
@@ -418,130 +495,137 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
           </defs>
           <rect width="100%" height="100%" fill="url(#grid)" />
 
-          {/* Connection lines */}
-          {connections.map((conn) => {
-            const fromBox = boxes.find((b) => b.id === conn.from)
-            const toBox = boxes.find((b) => b.id === conn.to)
-            if (!fromBox || !toBox) return null
-
-            const from = getBoxCenter(fromBox)
-            const to = getBoxCenter(toBox)
-            const isSelected = selectedConnectionId === conn.id
-
-            return (
-              <g key={conn.id}>
-                <line
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
-                  stroke="transparent"
-                  strokeWidth="12"
-                  className="cursor-pointer"
-                  onClick={() => handleConnectionClick(conn.id)}
-                  data-whiteboard-item="true"
-                />
-                <line
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
-                  stroke="currentColor"
-                  strokeWidth={isSelected ? "3" : "2"}
-                  className={isSelected ? "text-blue-400" : "text-zinc-500"}
-                  markerEnd="url(#arrowhead)"
-                  onClick={() => handleConnectionClick(conn.id)}
-                  data-whiteboard-item="true"
-                />
-              </g>
-            )
-          })}
-
-          <defs>
-            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-              <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" className="text-zinc-500" />
-            </marker>
-          </defs>
         </svg>
 
         {/* Whiteboard label */}
         <div className="absolute left-4 top-4 text-sm font-medium text-zinc-500">Whiteboard</div>
 
-        {/* Boxes */}
-        {boxes.map((box) => (
-          <Card
-            key={box.id}
-            className={`absolute cursor-move select-none border-zinc-700 bg-zinc-900 transition-shadow ${
-              connectMode ? "cursor-pointer hover:ring-2 hover:ring-primary" : ""
-            } ${connectFrom === box.id ? "ring-2 ring-primary" : ""} ${
-              selectedBoxId === box.id ? "ring-2 ring-blue-500" : ""
-            }`}
-            style={{ left: box.x, top: box.y, width: BOX_WIDTH, height: BOX_HEIGHT }}
-            onMouseDown={(e) => handleMouseDown(box.id, box.x, box.y, e)}
-            onClick={() => handleBoxClick(box.id)}
-            data-whiteboard-item="true"
-          >
-            {editingBoxId === box.id ? (
-              <textarea
-                ref={editingInputRef}
-                value={editingBoxValue}
-                onChange={(e) => setEditingBoxValue(e.target.value)}
-                onBlur={commitBoxText}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitBoxText()
-                  if (e.key === "Escape") setEditingBoxId(null)
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                className="h-full w-full resize-none bg-transparent p-2 text-center text-sm text-zinc-100 outline-none"
-                placeholder="Type here..."
-              />
-            ) : (
-              <div
-                className="flex h-full w-full items-center justify-center p-2 text-center text-sm text-zinc-100"
-                onDoubleClick={() => startEditingBox(box)}
-              >
-                {box.text || <span className="text-zinc-500">Double-click to edit</span>}
-              </div>
-            )}
-          </Card>
-        ))}
+        <div
+          className="absolute inset-0 origin-top-left"
+          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+        >
+          {/* Connection lines */}
+          <svg className="absolute inset-0 h-full w-full" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" className="text-zinc-500" />
+              </marker>
+            </defs>
+            {connections.map((conn) => {
+              const fromBox = boxes.find((b) => b.id === conn.from)
+              const toBox = boxes.find((b) => b.id === conn.to)
+              if (!fromBox || !toBox) return null
 
-        {/* Notes */}
-        {notes.map((note) => (
-          <div
-            key={note.id}
-            className={`absolute w-[120px] cursor-move select-none rounded-md bg-yellow-500/90 p-2 text-xs text-yellow-950 shadow-md ${
-              selectedNoteId === note.id ? "ring-2 ring-blue-500" : ""
-            }`}
-            style={{ left: note.x, top: note.y }}
-            onMouseDown={(e) => handleMouseDown(note.id, note.x, note.y, e)}
-            onClick={() => {
-              setSelectedNoteId(note.id)
-              setSelectedBoxId(null)
-              setSelectedConnectionId(null)
-            }}
-            data-whiteboard-item="true"
-          >
-            {editingNoteId === note.id ? (
-              <textarea
-                ref={editingNoteRef}
-                value={editingNoteValue}
-                onChange={(e) => setEditingNoteValue(e.target.value)}
-                onBlur={commitNoteText}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitNoteText()
-                  if (e.key === "Escape") setEditingNoteId(null)
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                className="h-full w-full resize-none bg-transparent text-xs text-yellow-950 outline-none"
-              />
-            ) : (
-              <div onDoubleClick={() => startEditingNote(note)}>
-                {note.content || <span className="text-yellow-900/70">Double-click to edit</span>}
-              </div>
-            )}
-          </div>
-        ))}
+              const from = getBoxCenter(fromBox)
+              const to = getBoxCenter(toBox)
+              const isSelected = selectedConnectionId === conn.id
+
+              return (
+                <g key={conn.id}>
+                  <line
+                    x1={from.x}
+                    y1={from.y}
+                    x2={to.x}
+                    y2={to.y}
+                    stroke="transparent"
+                    strokeWidth="12"
+                    className="cursor-pointer"
+                    onClick={() => handleConnectionClick(conn.id)}
+                    data-whiteboard-item="true"
+                  />
+                  <line
+                    x1={from.x}
+                    y1={from.y}
+                    x2={to.x}
+                    y2={to.y}
+                    stroke="currentColor"
+                    strokeWidth={isSelected ? "3" : "2"}
+                    className={isSelected ? "text-blue-400" : "text-zinc-500"}
+                    markerEnd="url(#arrowhead)"
+                    onClick={() => handleConnectionClick(conn.id)}
+                    data-whiteboard-item="true"
+                  />
+                </g>
+              )
+            })}
+          </svg>
+
+          {/* Boxes */}
+          {boxes.map((box) => (
+            <Card
+              key={box.id}
+              className={`absolute cursor-move select-none border-zinc-700 bg-zinc-900 transition-shadow ${
+                connectMode ? "cursor-pointer hover:ring-2 hover:ring-primary" : ""
+              } ${connectFrom === box.id ? "ring-2 ring-primary" : ""} ${
+                selectedBoxId === box.id ? "ring-2 ring-blue-500" : ""
+              }`}
+              style={{ left: box.x, top: box.y, width: BOX_WIDTH, height: BOX_HEIGHT }}
+              onMouseDown={(e) => handleMouseDown(box.id, box.x, box.y, e)}
+              onClick={() => handleBoxClick(box.id)}
+              data-whiteboard-item="true"
+            >
+              {editingBoxId === box.id ? (
+                <textarea
+                  ref={editingInputRef}
+                  value={editingBoxValue}
+                  onChange={(e) => setEditingBoxValue(e.target.value)}
+                  onBlur={commitBoxText}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitBoxText()
+                    if (e.key === "Escape") setEditingBoxId(null)
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="h-full w-full resize-none bg-transparent p-2 text-center text-sm text-zinc-100 outline-none"
+                  placeholder="Type here..."
+                />
+              ) : (
+                <div
+                  className="flex h-full w-full items-center justify-center p-2 text-center text-sm text-zinc-100"
+                  onDoubleClick={() => startEditingBox(box)}
+                >
+                  {box.text || <span className="text-zinc-500">Double-click to edit</span>}
+                </div>
+              )}
+            </Card>
+          ))}
+
+          {/* Notes */}
+          {notes.map((note) => (
+            <div
+              key={note.id}
+              className={`absolute w-[120px] cursor-move select-none rounded-md bg-yellow-500/90 p-2 text-xs text-yellow-950 shadow-md ${
+                selectedNoteId === note.id ? "ring-2 ring-blue-500" : ""
+              }`}
+              style={{ left: note.x, top: note.y }}
+              onMouseDown={(e) => handleMouseDown(note.id, note.x, note.y, e)}
+              onClick={() => {
+                setSelectedNoteId(note.id)
+                setSelectedBoxId(null)
+                setSelectedConnectionId(null)
+              }}
+              data-whiteboard-item="true"
+            >
+              {editingNoteId === note.id ? (
+                <textarea
+                  ref={editingNoteRef}
+                  value={editingNoteValue}
+                  onChange={(e) => setEditingNoteValue(e.target.value)}
+                  onBlur={commitNoteText}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitNoteText()
+                    if (e.key === "Escape") setEditingNoteId(null)
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="h-full w-full resize-none bg-transparent text-xs text-yellow-950 outline-none"
+                />
+              ) : (
+                <div onDoubleClick={() => startEditingNote(note)}>
+                  {note.content || <span className="text-yellow-900/70">Double-click to edit</span>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       {showClearDialog && (
