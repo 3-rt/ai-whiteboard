@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { supabase } from "@/lib/supabase"
 import type { BoardSnapshot } from "@/components/whiteboard"
-import { Send, Lightbulb, AlertTriangle, GitBranch, HelpCircle, Sparkles, MessageSquare, ClipboardCheck } from "lucide-react"
+import { Send, Lightbulb, AlertTriangle, HelpCircle, Sparkles, MessageSquare, ClipboardCheck, Wand2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
+import type { BoardDiff } from "@/lib/board-diff"
 
 interface DocumentMeta {
   id: string
@@ -19,8 +20,10 @@ interface DocumentMeta {
 
 interface AIPanelProps {
   board: BoardSnapshot | null
-  activeTab: "ask" | "summary" | "risks" | "decisions"
-  onTabChange: (tab: "ask" | "summary" | "risks" | "decisions") => void
+  activeTab: "ask" | "summary" | "risks" | "suggestions"
+  onTabChange: (tab: "ask" | "summary" | "risks" | "suggestions") => void
+  onApplyDiff: (diff: BoardDiff) => void
+  onPreviewDiff: (diff: BoardDiff | null) => void
   onOpenAssistant: () => void
   onOpenUpload: () => void
 }
@@ -123,7 +126,15 @@ const renderMarkdown = (text: string) => {
   return <div className="space-y-3">{nodes}</div>
 }
 
-export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpenUpload }: AIPanelProps) {
+export function AIPanel({
+  board,
+  activeTab,
+  onTabChange,
+  onApplyDiff,
+  onPreviewDiff,
+  onOpenAssistant,
+  onOpenUpload,
+}: AIPanelProps) {
   const [query, setQuery] = useState("")
   const [documents, setDocuments] = useState<DocumentMeta[]>([])
   const [askResponse, setAskResponse] = useState<string | null>(null)
@@ -135,9 +146,10 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
   const [risksResponse, setRisksResponse] = useState<string | null>(null)
   const [risksError, setRisksError] = useState<string | null>(null)
   const [isRisksLoading, setIsRisksLoading] = useState(false)
-  const [decisionsResponse, setDecisionsResponse] = useState<string | null>(null)
-  const [decisionsError, setDecisionsError] = useState<string | null>(null)
-  const [isDecisionsLoading, setIsDecisionsLoading] = useState(false)
+  const [suggestPrompt, setSuggestPrompt] = useState("")
+  const [suggestions, setSuggestions] = useState<BoardDiff | null>(null)
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null)
+  const [isSuggesting, setIsSuggesting] = useState(false)
 
   const loadDocuments = async () => {
     const boardId = localStorage.getItem("whiteboard-id")
@@ -162,6 +174,12 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
       console.error("Failed to load documents", error)
     })
   }, [])
+
+  useEffect(() => {
+    if (activeTab !== "suggestions") {
+      onPreviewDiff(null)
+    }
+  }, [activeTab, onPreviewDiff])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -197,7 +215,7 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
     }
   }
 
-  const handleGenerate = async (mode: "summary" | "risks" | "decisions") => {
+  const handleGenerate = async (mode: "summary" | "risks") => {
     const boardPayload = board ?? { boxes: [], connections: [], notes: [] }
     switch (mode) {
       case "summary":
@@ -207,10 +225,6 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
       case "risks":
         setIsRisksLoading(true)
         setRisksError(null)
-        break
-      case "decisions":
-        setIsDecisionsLoading(true)
-        setDecisionsError(null)
         break
     }
 
@@ -240,9 +254,6 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
         case "risks":
           setRisksResponse(responseText)
           break
-        case "decisions":
-          setDecisionsResponse(responseText)
-          break
       }
     } catch (error) {
       console.error(`${mode} generation failed`, error)
@@ -253,9 +264,6 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
         case "risks":
           setRisksError("Something went wrong. Try again.")
           break
-        case "decisions":
-          setDecisionsError("Something went wrong. Try again.")
-          break
       }
     } finally {
       switch (mode) {
@@ -265,11 +273,47 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
         case "risks":
           setIsRisksLoading(false)
           break
-        case "decisions":
-          setIsDecisionsLoading(false)
-          break
       }
     }
+  }
+
+  const handleSuggest = async () => {
+    setIsSuggesting(true)
+    setSuggestionsError(null)
+
+    try {
+      const boardPayload = board ?? { boxes: [], connections: [], notes: [] }
+      const res = await fetch("/api/ai/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          board: boardPayload,
+          prompt: suggestPrompt.trim(),
+        }),
+      })
+
+      if (!res.ok) {
+        throw new Error("Request failed")
+      }
+
+      const data = await res.json()
+      const next = data.diff ?? null
+      setSuggestions(next)
+      onPreviewDiff(next)
+    } catch (error) {
+      console.error("Suggestion request failed", error)
+      setSuggestionsError("Something went wrong. Try again.")
+      onPreviewDiff(null)
+    } finally {
+      setIsSuggesting(false)
+    }
+  }
+
+  const handleApplySuggestions = () => {
+    if (!suggestions) return
+    onApplyDiff(suggestions)
+    setSuggestions(null)
+    onPreviewDiff(null)
   }
 
   return (
@@ -324,9 +368,9 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
             <AlertTriangle className="mr-1 h-3 w-3" />
             Risks
           </TabsTrigger>
-          <TabsTrigger value="decisions" className="text-xs data-[state=active]:text-foreground">
-            <GitBranch className="mr-1 h-3 w-3" />
-            Decisions
+          <TabsTrigger value="suggestions" className="text-xs data-[state=active]:text-foreground">
+            <Wand2 className="mr-1 h-3 w-3" />
+            Suggest
           </TabsTrigger>
         </TabsList>
 
@@ -417,42 +461,91 @@ export function AIPanel({ board, activeTab, onTabChange, onOpenAssistant, onOpen
             </Card>
           </TabsContent>
 
-          <TabsContent value="decisions" className="mt-0 flex min-h-0 flex-1 flex-col">
+          <TabsContent value="suggestions" className="mt-0 flex min-h-0 flex-1 flex-col">
             <Card className="flex min-h-0 flex-1 flex-col border-border bg-card">
-              <CardContent className="min-h-0 flex-1 overflow-auto space-y-3 text-sm">
-                <div className="flex items-center justify-end">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleGenerate("decisions")}
-                    disabled={isDecisionsLoading}
-                  >
-                    {isDecisionsLoading ? "Generating..." : decisionsResponse ? "Refresh" : "Generate"}
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-foreground">AI Suggestions</CardTitle>
+              </CardHeader>
+              <CardContent className="min-h-0 flex-1 space-y-3 overflow-auto text-sm text-muted-foreground">
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Optional: focus the recommendation (e.g. add caching + observability)"
+                    value={suggestPrompt}
+                    onChange={(e) => setSuggestPrompt(e.target.value)}
+                    className="bg-muted text-foreground placeholder:text-muted-foreground"
+                  />
+                  <Button type="button" size="sm" variant="outline" onClick={handleSuggest} disabled={isSuggesting}>
+                    {isSuggesting ? "Generating..." : "Get Suggestions"}
                   </Button>
                 </div>
-                {decisionsResponse ? (
-                  <div className="text-base text-foreground">{renderMarkdown(decisionsResponse)}</div>
+
+                {suggestions ? (
+                  <div className="space-y-3">
+                    <div className="rounded-md border border-border bg-muted/40 p-3">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Additions</p>
+                      <div className="mt-2 space-y-2 text-sm text-foreground">
+                        <p>Boxes: {suggestions.addBoxes.length}</p>
+                        <p>Notes: {suggestions.addNotes.length}</p>
+                        <p>Connections: {suggestions.addConnections.length}</p>
+                      </div>
+                    </div>
+                    {suggestions.addBoxes.length > 0 && (
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Boxes</p>
+                        <div className="mt-2 space-y-1 text-sm text-foreground">
+                          {suggestions.addBoxes.map((box) => (
+                            <div key={box.id} className="rounded-md border border-border px-2 py-1">
+                              {box.text}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {suggestions.addNotes.length > 0 && (
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Notes</p>
+                        <div className="mt-2 space-y-1 text-sm text-foreground">
+                          {suggestions.addNotes.map((note) => (
+                            <div key={note.id} className="rounded-md border border-border px-2 py-1">
+                              {note.content}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {suggestions.addConnections.length > 0 && (
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Connections</p>
+                        <div className="mt-2 space-y-1 text-sm text-foreground">
+                          {suggestions.addConnections.map((conn) => (
+                            <div key={conn.id} className="rounded-md border border-border px-2 py-1">
+                              {conn.from} → {conn.to}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Button type="button" size="sm" onClick={handleApplySuggestions}>
+                        Apply
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setSuggestions(null)
+                          onPreviewDiff(null)
+                        }}
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
-                  <>
-                    <p className="text-xs text-muted-foreground">
-                      Key architectural choices detected in your design. Add more notes to surface clearer decisions.
-                    </p>
-                    <div className="border-l-2 border-primary pl-3">
-                      <p className="font-medium text-foreground">Centralized Authentication</p>
-                      <p className="text-xs text-muted-foreground">
-                        Auth is handled by a dedicated service, enabling SSO across services.
-                      </p>
-                    </div>
-                    <div className="border-l-2 border-primary pl-3">
-                      <p className="font-medium text-foreground">API Gateway Pattern</p>
-                      <p className="text-xs text-muted-foreground">
-                        Single entry point simplifies client integration and enables rate limiting.
-                      </p>
-                    </div>
-                  </>
+                  <p>Generate suggestions to see AI-proposed additions.</p>
                 )}
-                {decisionsError && <p className="mt-2 text-xs text-red-400">{decisionsError}</p>}
+                {suggestionsError && <p className="text-xs text-red-400">{suggestionsError}</p>}
               </CardContent>
             </Card>
           </TabsContent>

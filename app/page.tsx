@@ -1,16 +1,19 @@
 "use client"
 
 import { TopBar } from "@/components/top-bar"
-import { useState } from "react"
-import { Whiteboard, type BoardSnapshot } from "@/components/whiteboard"
+import { useRef, useState } from "react"
+import { Whiteboard, type BoardSnapshot, type WhiteboardHandle } from "@/components/whiteboard"
+import type { BoardDiff } from "@/lib/board-diff"
 import { AIPanel } from "@/components/ai-panel"
 import { DocumentsPanel } from "@/components/documents-panel"
 
 export default function Home() {
   const [boardSnapshot, setBoardSnapshot] = useState<BoardSnapshot | null>(null)
-  const [activeTab, setActiveTab] = useState<"ask" | "summary" | "risks" | "decisions">("ask")
+  const [activeTab, setActiveTab] = useState<"ask" | "summary" | "risks" | "suggestions">("ask")
   const [showDocumentsPanel, setShowDocumentsPanel] = useState(false)
   const [showHowTo, setShowHowTo] = useState(true)
+  const [previewDiff, setPreviewDiff] = useState<BoardDiff | null>(null)
+  const whiteboardRef = useRef<WhiteboardHandle>(null)
 
   return (
     <div className="flex h-screen flex-col bg-background dark">
@@ -40,7 +43,7 @@ export default function Home() {
         </div>
       )}
       <div className="flex flex-1 overflow-hidden">
-        <Whiteboard onBoardChange={setBoardSnapshot} />
+        <Whiteboard ref={whiteboardRef} onBoardChange={setBoardSnapshot} previewDiff={previewDiff} />
         {showDocumentsPanel ? (
           <DocumentsPanel
             onOpenAssistant={() => {
@@ -56,6 +59,8 @@ export default function Home() {
             board={boardSnapshot}
             activeTab={activeTab}
             onTabChange={setActiveTab}
+            onApplyDiff={(diff) => whiteboardRef.current?.applyDiff(diff)}
+            onPreviewDiff={setPreviewDiff}
             onOpenAssistant={() => {
               setActiveTab("summary")
               setShowDocumentsPanel(false)

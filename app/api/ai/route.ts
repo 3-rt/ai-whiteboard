@@ -6,8 +6,6 @@ const modeInstructions: Record<string, string> = {
   ask: "Answer the user's question using the board and document context. Be concise and practical.",
   summary: "Summarize the system in 2 short paragraphs and list the main components.",
   risks: "List the top architectural risks with a short mitigation for each.",
-  decisions:
-    "List key design decisions. For each, include decision, reason, assumptions, consequences, and open questions.",
 }
 
 export async function POST(req: Request) {

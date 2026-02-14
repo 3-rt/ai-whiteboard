@@ -2,14 +2,18 @@
 
 import type React from "react"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Link2, StickyNote, GripVertical } from "lucide-react"
 import { supabase } from "@/lib/supabase"
+import type { BoardDiff } from "@/lib/board-diff"
 
 const BOX_WIDTH = 180
 const BOX_HEIGHT = 120
+const NOTE_WIDTH = 120
+const NOTE_HEIGHT = 90
+const MIN_GAP = 40
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
 interface Box {
@@ -38,14 +42,78 @@ export interface BoardSnapshot {
   notes: Note[]
 }
 
-interface WhiteboardProps {
-  onBoardChange?: (board: BoardSnapshot) => void
+export interface WhiteboardHandle {
+  applyDiff: (diff: BoardDiff) => void
 }
 
-export function Whiteboard({ onBoardChange }: WhiteboardProps) {
+interface WhiteboardProps {
+  onBoardChange?: (board: BoardSnapshot) => void
+  previewDiff?: BoardDiff | null
+}
+
+export const Whiteboard = forwardRef<WhiteboardHandle, WhiteboardProps>(({ onBoardChange, previewDiff }, ref) => {
   const toNumber = (value: unknown, fallback: number) => {
     const num = typeof value === "number" ? value : Number.parseFloat(String(value))
     return Number.isFinite(num) ? num : fallback
+  }
+
+  const rectsOverlapWithGap = (
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number },
+    gap: number
+  ) =>
+    a.x < b.x + b.w + gap &&
+    a.x + a.w + gap > b.x &&
+    a.y < b.y + b.h + gap &&
+    a.y + a.h + gap > b.y
+
+  const findOpenSpot = (
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    occupied: Array<{ x: number; y: number; w: number; h: number }>
+  ) => {
+    const isBlocked = (nx: number, ny: number) =>
+      occupied.some((rect) => rectsOverlapWithGap({ x: nx, y: ny, w, h }, rect, MIN_GAP))
+
+    if (!isBlocked(x, y)) return { x, y }
+
+    const step = MIN_GAP
+    const maxRadius = step * 8
+    for (let radius = step; radius <= maxRadius; radius += step) {
+      for (let dx = -radius; dx <= radius; dx += step) {
+        for (let dy = -radius; dy <= radius; dy += step) {
+          if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue
+          const nx = x + dx
+          const ny = y + dy
+          if (!isBlocked(nx, ny)) return { x: nx, y: ny }
+        }
+      }
+    }
+
+    return { x, y }
+  }
+
+  const applyMinGapToDiff = (diff: BoardDiff, currentBoxes: Box[], currentNotes: Note[]) => {
+    const occupied: Array<{ x: number; y: number; w: number; h: number }> = [
+      ...currentBoxes.map((box) => ({ x: box.x, y: box.y, w: BOX_WIDTH, h: BOX_HEIGHT })),
+      ...currentNotes.map((note) => ({ x: note.x, y: note.y, w: NOTE_WIDTH, h: NOTE_HEIGHT })),
+    ]
+
+    const spacedBoxes = diff.addBoxes.map((box) => {
+      const { x, y } = findOpenSpot(box.x, box.y, BOX_WIDTH, BOX_HEIGHT, occupied)
+      occupied.push({ x, y, w: BOX_WIDTH, h: BOX_HEIGHT })
+      return { ...box, x, y }
+    })
+
+    const spacedNotes = diff.addNotes.map((note) => {
+      const { x, y } = findOpenSpot(note.x, note.y, NOTE_WIDTH, NOTE_HEIGHT, occupied)
+      occupied.push({ x, y, w: NOTE_WIDTH, h: NOTE_HEIGHT })
+      return { ...note, x, y }
+    })
+
+    return { ...diff, addBoxes: spacedBoxes, addNotes: spacedNotes }
   }
 
   // Core board state (nodes, edges, notes)
@@ -79,8 +147,28 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
   const editingNoteRef = useRef<HTMLTextAreaElement>(null)
   const [showClearDialog, setShowClearDialog] = useState(false)
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
+  const boxesRef = useRef<Box[]>([])
+  const notesRef = useRef<Note[]>([])
   const panStartRef = useRef<{ x: number; y: number; viewX: number; viewY: number } | null>(null)
   const spacePressedRef = useRef(false)
+
+  useEffect(() => {
+    boxesRef.current = boxes
+    notesRef.current = notes
+  }, [boxes, notes])
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      applyDiff: (diff) => {
+        const spacedDiff = applyMinGapToDiff(diff, boxesRef.current, notesRef.current)
+        setBoxes((prev) => [...prev, ...spacedDiff.addBoxes])
+        setNotes((prev) => [...prev, ...spacedDiff.addNotes])
+        setConnections((prev) => [...prev, ...spacedDiff.addConnections])
+      },
+    }),
+    []
+  )
 
   useEffect(() => {
     let isMounted = true
@@ -505,7 +593,11 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
           style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
         >
           {/* Connection lines */}
-          <svg className="absolute inset-0 h-full w-full" xmlns="http://www.w3.org/2000/svg">
+          <svg
+            className="absolute inset-0 h-full w-full overflow-visible"
+            style={{ overflow: "visible" }}
+            xmlns="http://www.w3.org/2000/svg"
+          >
             <defs>
               <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
                 <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" className="text-zinc-500" />
@@ -548,6 +640,32 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
                 </g>
               )
             })}
+            {previewDiff &&
+              previewDiff.addConnections.map((conn) => {
+                const fromBox =
+                  previewDiff.addBoxes.find((b) => b.id === conn.from) ?? boxes.find((b) => b.id === conn.from)
+                const toBox = previewDiff.addBoxes.find((b) => b.id === conn.to) ?? boxes.find((b) => b.id === conn.to)
+                if (!fromBox || !toBox) return null
+
+                const from = getBoxCenter(fromBox)
+                const to = getBoxCenter(toBox)
+
+                return (
+                  <g key={conn.id} className="pointer-events-none">
+                    <line
+                      x1={from.x}
+                      y1={from.y}
+                      x2={to.x}
+                      y2={to.y}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      className="text-blue-400/70"
+                      strokeDasharray="6 6"
+                      markerEnd="url(#arrowhead)"
+                    />
+                  </g>
+                )
+              })}
           </svg>
 
           {/* Boxes */}
@@ -588,6 +706,31 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
               )}
             </Card>
           ))}
+
+          {previewDiff && (
+            <div className="pointer-events-none">
+              {previewDiff.addBoxes.map((box) => (
+                <div
+                  key={box.id}
+                  className="absolute border border-dashed border-blue-400/80 bg-blue-500/10 text-[10px] text-blue-200/90"
+                  style={{ left: box.x, top: box.y, width: BOX_WIDTH, height: BOX_HEIGHT }}
+                >
+                  <div className="flex h-full w-full items-center justify-center p-2 text-center">
+                    {box.text}
+                  </div>
+                </div>
+              ))}
+              {previewDiff.addNotes.map((note) => (
+                <div
+                  key={note.id}
+                  className="absolute w-[120px] rounded-md border border-dashed border-yellow-400/80 bg-yellow-200/10 p-2 text-[10px] text-yellow-100/90"
+                  style={{ left: note.x, top: note.y }}
+                >
+                  {note.content}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Notes */}
           {notes.map((note) => (
@@ -648,4 +791,6 @@ export function Whiteboard({ onBoardChange }: WhiteboardProps) {
       )}
     </div>
   )
-}
+})
+
+Whiteboard.displayName = "Whiteboard"
